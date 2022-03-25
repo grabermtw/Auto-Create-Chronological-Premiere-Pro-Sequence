@@ -1,4 +1,4 @@
-# Auto-Create-Chronological-Premiere-Pro-Sequence
+# Auto-Create-Chronological-Premiere-Pro-Sequence (INCOMPLETE)
 
 ## Overview
 This is a script for creating a sequence in Premiere Pro containing all the media in a directory arranged by earliest datetime present in the file metadata. It will search `Date modified`, `Date created`, `Date taken`, `Date accessed`, and `Media created` and use the earliest date available from those for sorting to yield the greatest sorting accuracy possible (at least for the case I'm using it for).
