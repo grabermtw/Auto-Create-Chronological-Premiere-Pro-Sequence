@@ -5,7 +5,7 @@ This is a script for creating a sequence in Premiere Pro containing all the medi
 
 I'm creating this because Premiere Pro itself was for some reason unable to correctly sort the media by date (for me at least). Might've been just something I was doing wrong, but regardless, writing this script is the easiest solution I've found.
 
-This was written on a Windows 10 machine, and almost certainly wouldn't work on Mac or Linux without modification of Part 1 (where the directories are searched and the media is sorted), as that uses `win32com.client` for getting the metadata of each file.
+This was written on a Windows 10 machine, and almost certainly wouldn't work on Mac or Linux without modification of Part 1 (where the directories are searched and the media is sorted), as that uses `win32com.client` for getting the metadata of each file. But if anyone wants to attempt that modification, be my guest!
 
 ## Use
 
