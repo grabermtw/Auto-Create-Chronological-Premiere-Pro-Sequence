@@ -1,12 +1,15 @@
+from turtle import width
 import pymiere
 import os
 import sys
 import win32com.client
 from datetime import datetime
 import json
+import cv2
+import re
 
 # To run:
-# `python3 ./create_chronological_prpro_seq <relative search path>` `<sorted files list json filename>`
+# `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename>`
 # Example: `python3 ./create_chronological_prpro_seq .. sorted_files.json`
 
 # IMPORTANT: Manually import all files into premiere *first*
@@ -14,6 +17,7 @@ import json
 # ---- PART 1 FUNCTIONS: Sorting the files by earliest date in metadata ---- 
 
 DATE_META = ["Date modified", "Date created", "Date taken", "Date accessed", "Media created"]
+VIDEO_EXTENSIONS = [".mp4", ".mov"]
 
 # Add 0's to front of single-digit months and days of the month and hours.
 # Assumes string is formatted like '1/2/2022 2:41 PM' for example.
@@ -68,9 +72,13 @@ def get_file_metadata(dir_path, filename):
         file_metadata[field] = clean_date_string(file_metadata.get(field))
 
     return file_metadata
-    
-# Search the metadata of a file and get its earliest date
-def get_earliest_date(filepath):
+
+DIMENSIONS_PATTERN = re.compile(r"(\d+) x (\d+)")
+
+# Search the metadata of a file and get its earliest date as well as its dimensions
+# because Adobe ExtendScript doesn't have a way to get the dimensions of a photo or video
+# from an item that has been imported into Premiere Pro for some reason :/
+def get_earliest_date_and_dimensions(filepath):
     dir_path = os.path.abspath(os.path.split(filepath)[0])
     filename = os.path.split(filepath)[-1]
     file_meta = get_file_metadata(dir_path, filename)
@@ -79,8 +87,48 @@ def get_earliest_date(filepath):
     for field in DATE_META:
         if file_meta[field] != "NA":
             datetime_meta.append(datetime.strptime(file_meta[field], '%m/%d/%Y %I:%M %p'))
-    # return earliest date
-    return min(datetime_meta)
+    
+    # Get the dimensions, defaulting to 0 if the dimensions aren't in the metadata and if
+    # OpenCV can't calculate them. Some .MOV
+    width = 0
+    height = 0
+    # handle videos
+    if os.path.splitext(filepath)[-1].lower() in VIDEO_EXTENSIONS:
+        try:
+            height = int(file_meta["Frame height"])
+            width = int(file_meta["Frame width"])
+        except:
+            vcap = cv2.VideoCapture(filepath)
+            if vcap.isOpened():
+                width = int(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # handle photos
+    else:
+        try:
+            height = int(file_meta["Height"])
+            width = int(file_meta["Width"])
+        except:
+            # HEIC files are missing the "Height" and "Width" properties for some reason
+            # but they still have "Dimensions"
+            try:
+                dim_group = re.search(DIMENSIONS_PATTERN, file_meta["Dimensions"])
+                width = int(dim_group.group(1))
+                height = int(dim_group.group(2))
+            except:
+                try: # finally, see if OpenCV can get them
+                    im = cv2.imread(filepath)
+                    height = int(im.shape[0])
+                    width = int(im.shape[1])
+                except:
+                    pass
+    if height == 0 or width == 0:
+        print("Error getting dimensions of {0}. Dimensions will be left as 0".format(filepath))
+
+    # return a dictionary with the earliest date and dimensions
+    return { "filename": filepath,
+             "datetime": min(datetime_meta),
+             "height": height,
+             "width": width }
 
 # Sort all the files based on earliest datetime in metadata
 def sort_files(search_root, sorted_json_filename):
@@ -88,21 +136,22 @@ def sort_files(search_root, sorted_json_filename):
     
     all_files = []
     for (dirpath, _, filenames) in os.walk(search_root):
-        if dirpath != "..\\Premiere Pro script":
+        if "..\\Auto-Create-Chronological-Premiere-Pro-Sequence" not in dirpath:
             all_files.extend(os.path.join(dirpath, filename) for filename in filenames)
 
     numfiles = len(all_files)
 
-    datetime_lst = []
-    for i, f in enumerate(all_files):
+    file_metas = []
+    for i, filepath in enumerate(all_files):
         if i % 100 == 0:
             print("Metadata retrieved from", i, "files of", numfiles)
-        print(f)
-        datetime_lst.append(get_earliest_date(f))
+        print(filepath)
+        file_meta = get_earliest_date_and_dimensions(filepath)
+        file_metas.append(file_meta)
 
     print("Sorting files by datetime...")
     # sort list by earliest date in metadata
-    sorted_files = [x for _, x in sorted(zip(datetime_lst, all_files))]
+    sorted_files = sorted(file_metas, key=lambda x: x['datetime'])
     print("Sorted!")
 
     # save the list in a JSON file so we hopefully don't have to redo this whole thing again
@@ -124,7 +173,30 @@ def read_config_sequence(project, config_seq_name):
     if not config_seq:
         print("ERROR: No sequence named {0} has been found in the open Premiere Pro project!".format(config_seq_name))
         exit(1)
-    print(config_seq.name)
+    
+    prop_dict = { "photo": {}, "video": {} }
+
+    # Get the necessary properties for each clip in the first video track.
+    for clip in config_seq.videoTracks[0].clips:
+        # if it's a video...
+        if os.path.splitext(clip.name)[-1].lower() in VIDEO_EXTENSIONS:
+            # TODO record video dimensions
+            
+            # TODO record video Motion property
+            for component in clip.components:
+                if component.displayName == "Motion":
+
+                    break
+
+        # else assume it's a photo
+        else:
+            continue
+
+
+    return config_seq.getSettings(), prop_dict
+
+
+
 
 
 # ------------------------------------------------
@@ -141,7 +213,7 @@ def main():
     else:
         sorted_files = sort_files(search_root, sorted_json_filename)
     
-    # ---- PART 2: Create the Premiere Pro sequence
+    # ---- PART 2: Read the Premiere Pro config sequence
 
     project = pymiere.objects.app.project
 
