@@ -156,7 +156,7 @@ def sort_files(search_root, sorted_json_filename):
 
     # save the list in a JSON file so we hopefully don't have to redo this whole thing again
     with open(sorted_json_filename, "w") as f:
-        f.write(json.dumps(sorted_files))
+        f.write(json.dumps(sorted_files, default=str, sort_keys=False))
 
     return sorted_files
 
