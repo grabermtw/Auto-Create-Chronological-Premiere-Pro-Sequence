@@ -132,6 +132,7 @@ def get_earliest_date_and_dimensions(filepath):
 
 # Sort all the files based on earliest datetime in metadata
 def sort_files(search_root, sorted_json_filename):
+    print("Retrieving metadata of files...")
     # Get list of all files in windows file explorer (not premiere)
     
     all_files = []
@@ -152,7 +153,7 @@ def sort_files(search_root, sorted_json_filename):
     print("Sorting files by datetime...")
     # sort list by earliest date in metadata
     sorted_files = sorted(file_metas, key=lambda x: x['datetime'])
-    print("Sorted!")
+    print("Sorted! Saving sorted files metadata in {0}.".format(sorted_json_filename))
 
     # save the list in a JSON file so we hopefully don't have to redo this whole thing again
     with open(sorted_json_filename, "w") as f:
@@ -163,13 +164,25 @@ def sort_files(search_root, sorted_json_filename):
 
 # ---- PART 2 FUNCTIONS: Reading the config sequence ----
 
-def read_config_sequence(project, config_seq_name):
-    config_seq = None
-    for seq in project.sequences:
-        if seq.name == config_seq_name:
-            config_seq = seq
-            break
+# Retreives the info that was stored in the JSON file for a given TrackItem clip.
+# Need this because there's no way to obtain the dimensions of a particular photo or video
+# via Adobe's API....
+def get_clip_filesys_info(clip, sorted_files):
+    # Remove the '', project name, and parent bin from the path.
+    # example: "\winter tripe.prproj\West Trip Jan 2022\Tim's Photos\IMG_7079.mov"
+    # becomes ["Tim's Photos", "IMG_7079.mov"]
+    clipProjPath = clip.projectItem.treePath.split('\\')[3:]
+    # Create the path as it would have been formatted in the JSON file entry.
+    # example: ["Tim's Photos", "IMG_7079.mov"] becomes "..\Tim's Photos\IMG_7079.mov"
+    clip_filepath = os.path.join(sys.argv[1], *clipProjPath)
+    # return the first entry in the sorted list with that filepath/filename
+    return next((x for x in sorted_files if x["filename"] == clip_filepath), None)
     
+# Reads the configuration sequence in the Premiere Pro project and returns
+# a dictionary that specifies what effects and durations should be applied to
+# each type of media
+def read_config_sequence(project, config_seq_name, sorted_files):
+    config_seq = next((x for x in project.sequences if x.name == config_seq_name), None)
     if not config_seq:
         print("ERROR: No sequence named {0} has been found in the open Premiere Pro project!".format(config_seq_name))
         exit(1)
@@ -177,26 +190,40 @@ def read_config_sequence(project, config_seq_name):
     prop_dict = { "photo": {}, "video": {} }
 
     # Get the necessary properties for each clip in the first video track.
+    print("Reading {0} to learn what to do with each type of photo and video...".format(config_seq_name))
     for clip in config_seq.videoTracks[0].clips:
-        # if it's a video...
-        if os.path.splitext(clip.name)[-1].lower() in VIDEO_EXTENSIONS:
-            # TODO record video dimensions
-            
-            # TODO record video Motion property
-            for component in clip.components:
-                if component.displayName == "Motion":
-
-                    break
-
-        # else assume it's a photo
+        # get info with video dimensions:
+        clipInfo = get_clip_filesys_info(clip, sorted_files)
+        if clipInfo is None:
+            print(("CONFIG SEQUENCE WARNING: "
+                   "Dimensions for {0} could not be found. "
+                   "Its effect properties will not be recorded.").format(clip.projectItem.treePath))
         else:
-            continue
-
-
+            height = clipInfo["height"]
+            width = clipInfo["width"]
+            # get the "Scale" property of the "Motion" component
+            motion = next(x for x in clip.components if x.displayName == "Motion")
+            scale = next(x for x in motion.properties if x.displayName == "Scale")
+            
+            # if it's a video...
+            if os.path.splitext(clip.name)[-1].lower() in VIDEO_EXTENSIONS:
+                # assume that this lacks keyframes and is the only property we care about
+                prop_dict["video"][(height, width)] = { "scale": scale.getValue() }
+            
+            # else assume it's a photo
+            else:
+                # for photos we care about the clip duration
+                prop_dict["photo"][(height, width)] = { "duration": clip.duration }
+                # we also care about the Scale keyframes
+                # assume that there are 2 keyframes, 1 at beginning and 1 at end of clip
+                prop_dict["photo"][(height, width)]["scaleInKey"] = scale.getValueAtTime(clip.inPoint)
+                prop_dict["photo"][(height, width)]["scaleOutKey"] = scale.getValueAtTime(clip.outPoint)
+                # We care about Position keyframes too but those will just be added by default
+                # assuming they are co-located with the Scale keyframes but they will retain their default values.
+                # So no need to record anything for them here (for this project at least).
+    
+    print("Finished reading {0}!".format(config_seq_name))
     return config_seq.getSettings(), prop_dict
-
-
-
 
 
 # ------------------------------------------------
@@ -210,6 +237,7 @@ def main():
     if os.path.exists(sorted_json_filename):
         with open(sorted_json_filename, "r") as f:
             sorted_files = json.load(f)
+        print("Sorted files relevant metadata loaded from {0}".format(sorted_json_filename))
     else:
         sorted_files = sort_files(search_root, sorted_json_filename)
     
@@ -218,8 +246,16 @@ def main():
     project = pymiere.objects.app.project
 
     # First read the "config_sequence" to decide how to handle each media type
-    read_config_sequence(project, "config_sequence")
-    
+    seq_settings, prop_dict = read_config_sequence(project, "config_sequence", sorted_files)
+
+    # create a new sequence
+    new_seq_name = "GENERATED_SEQUENCE"
+    pymiere.objects.alert(("You're about to be prompted to create a new sequence."
+                           "Just click \"OK\" and don't worry about it!"))
+    project.createNewSequence(new_seq_name, "placeholderID")
+    # user might need to click "Okay" in Premiere here
+    new_seq = next(x for x in project.sequences if x.name == new_seq_name)
+    new_seq.setSettings(seq_settings)
 
 # find the corresponding file by name in project bins
 
