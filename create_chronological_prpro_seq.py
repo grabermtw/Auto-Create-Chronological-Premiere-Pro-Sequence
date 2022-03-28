@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import cv2
 import re
+import pickle
 
 # To run:
 # `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename>`
@@ -177,7 +178,8 @@ def bin_tree_path_to_filepath(bin_tree_path):
 
 # Returns a dictionary representing the bin structure that is
 # much faster to search than the bins themselves.
-def memoize_bins(parent_bin, bin_dict):
+def memoize_bins(parent_bin, pickle_filename):
+    print("Creating a dictionary for searching project bins...")
     bin_enum = pymiere.objects.ProjectItemType.BIN
     def memoize_bins_rec(parent_bin, bin_dict, total):
         for child in parent_bin.children:
@@ -190,7 +192,11 @@ def memoize_bins(parent_bin, bin_dict):
                 total += 1
                 print("Item {0} catalogued: {1}".format(total, filepath))
         return bin_dict, total
-    return memoize_bins_rec(parent_bin, {}, 0)
+    bin_dict, _ = memoize_bins_rec(parent_bin, {}, 0)
+    print("Bin dictionary created! Pickling result in {0} for later!".format(pickle_filename))
+    with open(pickle_filename, 'ab') as f:
+        pickle.dump(bin_dict, f)
+    return bin_dict
 
 # Retreives the info that was stored in the JSON file for a given TrackItem clip.
 # Need this because there's no way to obtain the dimensions of a particular photo or video
@@ -214,6 +220,7 @@ def read_config_sequence(project, config_seq_name, sorted_files):
     # Get the necessary properties for each clip in the first video track.
     print("Reading {0} to learn what to do with each type of photo and video...".format(config_seq_name))
     for clip in config_seq.videoTracks[0].clips:
+        print("Analyzing {0}...".format(clip.name))
         # get info with video dimensions:
         clipInfo = get_clip_filesys_info(clip, sorted_files)
         if clipInfo is None:
@@ -251,49 +258,55 @@ def read_config_sequence(project, config_seq_name, sorted_files):
 # used in the configuration sequence, so here we'll find the closest one.
 # For now just go based on the height... usually more important than width
 def calculate_closest_dimensions(file_info, media_dict):
-    return sorted([x for x in media_dict.keys], key=lambda y: abs(file_info["height"] - y[0]))[0]
+    return sorted([x for x in media_dict.keys()], key=lambda y: abs(file_info["height"] - y[0]))[0]
 
 # Populate the new sequence with the photos and videos in the correct order
 # with the correct motion properties applied
-def add_clips_to_sequence(project, new_seq, sorted_files, prop_dict, bin_dict):
+def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
     print("Adding clips to sequence in chronological order...")
     track = new_seq.videoTracks[0]
     seq_time = pymiere.Time()
-    seq_time.ticks = "0"
+    seq_time.seconds = 0
     num_files = len(sorted_files)
     for i, file_info in enumerate(sorted_files):
+        proj_item = None
+        if os.path.splitext(file_info['filename'])[-1].lower() in [".cr2", ".cr3"]:
+            print("{0} of {1}: Skipping RAW file {2}".format(str(i + 1), num_files, file_info['filename']))
+            continue
         try:
+            print("{0} of {1}: Adding {2} to the sequence and applying motion properties...".format(str(i+1), num_files, file_info["filename"]))
             proj_item = bin_dict[file_info["filename"]]
-            # add the projectItem to the sequence
-            track.insertClip(proj_item, seq_time.ticks)
-            # apply the appropriate Motion properties
-            new_clip = track.clips[i]
-            motion = next(x for x in new_clip.components if x.displayName == "Motion")
-            scale = next(x for x in motion.properties if x.displayName == "Scale")
-            # video
-            if os.path.splitext(file_info['filename'])[-1].lower() in VIDEO_EXTENSIONS:
-                dimensions = calculate_closest_dimensions(file_info, prop_dict["video"])
-                scale.SetValue(prop_dict["video"][dimensions]["scale"])
-            # photo
-            else:
-                position = next(x for x in motion.properties if x.displayName == "Position")
-                dimensions = calculate_closest_dimensions(file_info, prop_dict["photo"])
-                new_clip.end = seq_time + prop_dict["photo"][dimensions]["duration"]
-                scale.setTimeVarying(True)
-                position.setTimeVarying(True)
-                scale.addKey(seq_time)
-                scale.setValueAtKey(seq_time, prop_dict["photo"]["scaleInKey"])
-                position.addKey(seq_time)
-                scale.addKey(new_clip.end)
-                scale.setValueAtKey(new_clip.end, prop_dict["photo"]["scaleOutKey"])
-                position.addKey(new_clip.end)
-            seq_time += new_clip.duration
-            print("Added {0} to the sequence and applied motion properties!".format(file_info["filename"]))
         except KeyError:
             print(("WARNING: {0} appears to be missing from the Premiere project files "
                        "and will be skipped!").format(file_info['filename']))
             continue
-      
+        # add the projectItem to the sequence
+        track.insertClip(proj_item, seq_time.ticks)
+        # apply the appropriate Motion properties
+        new_clip = track.clips[i]
+        motion = next(x for x in new_clip.components if x.displayName == "Motion")
+        scale = next(x for x in motion.properties if x.displayName == "Scale")
+        # video
+        if os.path.splitext(file_info['filename'])[-1].lower() in VIDEO_EXTENSIONS:
+            dimensions = calculate_closest_dimensions(file_info, prop_dict["video"])
+            scale.SetValue(prop_dict["video"][dimensions]["scale"])
+        # photo
+        else:
+            position = next(x for x in motion.properties if x.displayName == "Position")
+            dimensions = calculate_closest_dimensions(file_info, prop_dict["photo"])
+            new_clip.outPoint.seconds = seq_time.seconds + prop_dict["photo"][dimensions]["duration"].seconds
+            scale.setTimeVarying(True)
+            position.setTimeVarying(True)
+            scale.addKey(seq_time.seconds)
+            scale.setValueAtKey(seq_time.seconds, prop_dict["photo"][dimensions]["scaleInKey"], 1)
+            position.addKey(seq_time.seconds)
+            position.setValueAtKey(seq_time.seconds, [0.5, 0.5], 1)
+            scale.addKey(new_clip.end.seconds)
+            scale.setValueAtKey(new_clip.end.seconds, prop_dict["photo"][dimensions]["scaleOutKey"], 1)
+            position.setValueAtKey(new_clip.end.seconds, [0.5, 0.5], 1)
+            position.addKey(new_clip.end.seconds)
+        seq_time.seconds += new_clip.duration.seconds
+        
         
 
 # ------------------------------------------------
@@ -328,26 +341,32 @@ def main():
     # First memoize the contents of the bins in the Premiere Pro file
     # because Premiere is incredibly slow at searching the bins....
     # It's better to just do it once.
-    # TODO: add support for pickling because this is still super slow
-    print("Creating a dictionary for searching project bins...")
-    bin_dict = memoize_bins(parent_bin, {})
-    print("Bin dictionary created!")
+    pickle_filename = "bin_dict_pkl"
+    if os.path.exists(pickle_filename):
+        with open(pickle_filename, 'rb') as f:
+            bin_dict = pickle.load(f)
+        print("Loaded previously pickled project bin dictionary from {0}".format(pickle_filename))
+    else:
+        bin_dict = memoize_bins(parent_bin, pickle_filename)
 
     # Next read the "config_sequence" to decide how to handle each media type
-    seq_settings, prop_dict = read_config_sequence(project, "config_sequence", sorted_files)
+    seq_settings, prop_dict = read_config_sequence(project, "config_sequence_demo", sorted_files)
 
     # create a new sequence using the same settings as the config sequence
     new_seq_name = "GENERATED_SEQUENCE"
-    pymiere.objects.alert(("You're about to be prompted to create a new sequence."
+    print("Go click \"OK\" on the alert in Premiere!")
+    pymiere.objects.alert(("You're about to be prompted to create a new sequence.\n"
                            "Just click \"OK\" and don't worry about it!"))
+    print("Creating new sequence {0}...".format(new_seq_name))
     project.createNewSequence(new_seq_name, "placeholderID")
     # user might need to click "Okay" in Premiere here
     new_seq = next(x for x in project.sequences if x.name == new_seq_name)
     new_seq.setSettings(seq_settings)
+    print("Sequence {0} has been created!".format(new_seq_name))
 
     # Populate the new sequence with the photos and videos in the correct order
     # with the correct motion properties applied
-    add_clips_to_sequence(project, new_seq, sorted_files, prop_dict, bin_dict)
+    add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict)
 
     print("Finished adding all {0} clips to {1}!".format(len(sorted_files), new_seq_name))
     exit(0)
