@@ -1,3 +1,5 @@
+from operator import ne
+from sqlite3 import TimeFromTicks
 from turtle import width
 import pymiere
 import os
@@ -162,19 +164,39 @@ def sort_files(search_root, sorted_json_filename):
     return sorted_files
 
 
-# ---- PART 2 FUNCTIONS: Reading the config sequence ----
+# ---- PART 2 FUNCTIONS: Reading the config sequence and generating the new sequence ----
+
+def bin_tree_path_to_filepath(bin_tree_path):
+    # Remove the '', project name, and parent bin from the path.
+    # example: "\winter tripe.prproj\West Trip Jan 2022\Tim's Photos\IMG_7079.mov"
+    # becomes ["Tim's Photos", "IMG_7079.mov"]
+    clipProjPath = bin_tree_path.split('\\')[3:]
+    # Create the path as it would have been formatted in the JSON file entry for easy lookup.
+    # example: ["Tim's Photos", "IMG_7079.mov"] becomes "..\Tim's Photos\IMG_7079.mov"
+    return os.path.join(sys.argv[1], *clipProjPath)
+
+# Returns a dictionary representing the bin structure that is
+# much faster to search than the bins themselves.
+def memoize_bins(parent_bin, bin_dict):
+    bin_enum = pymiere.objects.ProjectItemType.BIN
+    def memoize_bins_rec(parent_bin, bin_dict, total):
+        for child in parent_bin.children:
+            if child.type == bin_enum:
+                new_dict, total = memoize_bins_rec(child, bin_dict, total)
+                bin_dict.update(new_dict)
+            else:
+                filepath = bin_tree_path_to_filepath(child.treePath)
+                bin_dict[filepath] = child
+                total += 1
+                print("Item {0} catalogued: {1}".format(total, filepath))
+        return bin_dict, total
+    return memoize_bins_rec(parent_bin, {}, 0)
 
 # Retreives the info that was stored in the JSON file for a given TrackItem clip.
 # Need this because there's no way to obtain the dimensions of a particular photo or video
 # via Adobe's API....
 def get_clip_filesys_info(clip, sorted_files):
-    # Remove the '', project name, and parent bin from the path.
-    # example: "\winter tripe.prproj\West Trip Jan 2022\Tim's Photos\IMG_7079.mov"
-    # becomes ["Tim's Photos", "IMG_7079.mov"]
-    clipProjPath = clip.projectItem.treePath.split('\\')[3:]
-    # Create the path as it would have been formatted in the JSON file entry.
-    # example: ["Tim's Photos", "IMG_7079.mov"] becomes "..\Tim's Photos\IMG_7079.mov"
-    clip_filepath = os.path.join(sys.argv[1], *clipProjPath)
+    clip_filepath = bin_tree_path_to_filepath(clip.projectItem.treePath)
     # return the first entry in the sorted list with that filepath/filename
     return next((x for x in sorted_files if x["filename"] == clip_filepath), None)
     
@@ -225,6 +247,54 @@ def read_config_sequence(project, config_seq_name, sorted_files):
     print("Finished reading {0}!".format(config_seq_name))
     return config_seq.getSettings(), prop_dict
 
+# Some clips may not exactly match the dimensions of those that were
+# used in the configuration sequence, so here we'll find the closest one.
+# For now just go based on the height... usually more important than width
+def calculate_closest_dimensions(file_info, media_dict):
+    return sorted([x for x in media_dict.keys], key=lambda y: abs(file_info["height"] - y[0]))[0]
+
+# Populate the new sequence with the photos and videos in the correct order
+# with the correct motion properties applied
+def add_clips_to_sequence(project, new_seq, sorted_files, prop_dict, bin_dict):
+    print("Adding clips to sequence in chronological order...")
+    track = new_seq.videoTracks[0]
+    seq_time = pymiere.Time()
+    seq_time.ticks = "0"
+    num_files = len(sorted_files)
+    for i, file_info in enumerate(sorted_files):
+        try:
+            proj_item = bin_dict[file_info["filename"]]
+            # add the projectItem to the sequence
+            track.insertClip(proj_item, seq_time.ticks)
+            # apply the appropriate Motion properties
+            new_clip = track.clips[i]
+            motion = next(x for x in new_clip.components if x.displayName == "Motion")
+            scale = next(x for x in motion.properties if x.displayName == "Scale")
+            # video
+            if os.path.splitext(file_info['filename'])[-1].lower() in VIDEO_EXTENSIONS:
+                dimensions = calculate_closest_dimensions(file_info, prop_dict["video"])
+                scale.SetValue(prop_dict["video"][dimensions]["scale"])
+            # photo
+            else:
+                position = next(x for x in motion.properties if x.displayName == "Position")
+                dimensions = calculate_closest_dimensions(file_info, prop_dict["photo"])
+                new_clip.end = seq_time + prop_dict["photo"][dimensions]["duration"]
+                scale.setTimeVarying(True)
+                position.setTimeVarying(True)
+                scale.addKey(seq_time)
+                scale.setValueAtKey(seq_time, prop_dict["photo"]["scaleInKey"])
+                position.addKey(seq_time)
+                scale.addKey(new_clip.end)
+                scale.setValueAtKey(new_clip.end, prop_dict["photo"]["scaleOutKey"])
+                position.addKey(new_clip.end)
+            seq_time += new_clip.duration
+            print("Added {0} to the sequence and applied motion properties!".format(file_info["filename"]))
+        except KeyError:
+            print(("WARNING: {0} appears to be missing from the Premiere project files "
+                       "and will be skipped!").format(file_info['filename']))
+            continue
+      
+        
 
 # ------------------------------------------------
 
@@ -232,6 +302,18 @@ def main():
     # ---- PART 1: Organize the files ----
     search_root = sys.argv[1]
     sorted_json_filename = sys.argv[2]
+    project = pymiere.objects.app.project
+
+    # Before doing anything else, verify that the specified directory is present as a bin
+    # in the Premiere Pro project.
+    root_dirname = os.path.basename(os.path.abspath(search_root))
+    parent_bin = next((x for x in project.rootItem.children if x.name == root_dirname), None)
+    if not parent_bin:
+        print(("ERROR: Bin \"{0}\" not found.\n"
+               "There should be a bin named {0} in the root of the project explorer"
+               "in Premiere that contains the subdirectories with the media!").format(root_dirname))
+        exit(1)
+
     # only get all the metadata and sort it if we haven't done that before
     sorted_files = []
     if os.path.exists(sorted_json_filename):
@@ -241,14 +323,20 @@ def main():
     else:
         sorted_files = sort_files(search_root, sorted_json_filename)
     
-    # ---- PART 2: Read the Premiere Pro config sequence
+    # ---- PART 2: Read the Premiere Pro config sequence and generate the new sequence
+    
+    # First memoize the contents of the bins in the Premiere Pro file
+    # because Premiere is incredibly slow at searching the bins....
+    # It's better to just do it once.
+    # TODO: add support for pickling because this is still super slow
+    print("Creating a dictionary for searching project bins...")
+    bin_dict = memoize_bins(parent_bin, {})
+    print("Bin dictionary created!")
 
-    project = pymiere.objects.app.project
-
-    # First read the "config_sequence" to decide how to handle each media type
+    # Next read the "config_sequence" to decide how to handle each media type
     seq_settings, prop_dict = read_config_sequence(project, "config_sequence", sorted_files)
 
-    # create a new sequence
+    # create a new sequence using the same settings as the config sequence
     new_seq_name = "GENERATED_SEQUENCE"
     pymiere.objects.alert(("You're about to be prompted to create a new sequence."
                            "Just click \"OK\" and don't worry about it!"))
@@ -257,9 +345,12 @@ def main():
     new_seq = next(x for x in project.sequences if x.name == new_seq_name)
     new_seq.setSettings(seq_settings)
 
-# find the corresponding file by name in project bins
+    # Populate the new sequence with the photos and videos in the correct order
+    # with the correct motion properties applied
+    add_clips_to_sequence(project, new_seq, sorted_files, prop_dict, bin_dict)
 
-# for each imported file, use track.insertClip() to insert it into the sequence
+    print("Finished adding all {0} clips to {1}!".format(len(sorted_files), new_seq_name))
+    exit(0)
 
 if __name__ == "__main__":
     main()
