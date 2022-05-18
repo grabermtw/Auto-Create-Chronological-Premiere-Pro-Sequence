@@ -212,8 +212,6 @@ def sort_files(search_root, sorted_json_filename, tz_config):
         # and assign its datetime to the live photo's video
         dt = next(x["datetime"] for x in file_metas if os.path.splitext(x["filename"])[0] == os.path.splitext(lp[0])[0] and x["filename"] != lp[0])
         file_metas[lp[1]]["datetime"] = dt
-    
-    # TODO: Handle live photos! They will be videos that share the same filepath/filename as the photo that they should be positioned next to!
 
     print("Sorting files by datetime...")
     # sort list by earliest date in metadata, which will be found in the 'datetime' field
@@ -329,6 +327,9 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
     track = new_seq.videoTracks[0]
     seq_time = pymiere.Time()
     seq_time.seconds = 0
+    # get the time duration of a single frame
+    frameTime = pymiere.Time()
+    frameTime.ticks = str(new_seq.timebase)
     num_files = len(sorted_files)
     for i, file_info in enumerate(sorted_files):
         proj_item = None
@@ -343,7 +344,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
                        "and will be skipped!").format(file_info['filename']))
             continue
         # add the projectItem to the sequence
-        track.insertClip(proj_item, seq_time.ticks)
+        track.insertClip(proj_item, seq_time.seconds)
         # apply the appropriate Motion properties
         new_clip = track.clips[i]
         motion = next(x for x in new_clip.components if x.displayName == "Motion")
@@ -351,7 +352,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
         # video
         if os.path.splitext(file_info['filename'])[-1].lower() in VIDEO_EXTENSIONS:
             dimensions = calculate_closest_dimensions(file_info, prop_dict["video"])
-            scale.SetValue(prop_dict["video"][dimensions]["scale"])
+            scale.setValue(prop_dict["video"][dimensions]["scale"], True)
         # photo
         else:
             position = next(x for x in motion.properties if x.displayName == "Position")
@@ -359,14 +360,19 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
             new_clip.outPoint.seconds = seq_time.seconds + prop_dict["photo"][dimensions]["duration"].seconds
             scale.setTimeVarying(True)
             position.setTimeVarying(True)
-            scale.addKey(seq_time.seconds)
-            scale.setValueAtKey(seq_time.seconds, prop_dict["photo"][dimensions]["scaleInKey"], 1)
-            position.addKey(seq_time.seconds)
-            position.setValueAtKey(seq_time.seconds, [0.5, 0.5], 1)
-            scale.addKey(new_clip.end.seconds)
-            scale.setValueAtKey(new_clip.end.seconds, prop_dict["photo"][dimensions]["scaleOutKey"], 1)
-            position.setValueAtKey(new_clip.end.seconds, [0.5, 0.5], 1)
-            position.addKey(new_clip.end.seconds)
+            # start keyframes
+            scale.addKey(new_clip.inPoint.seconds)
+            scale.setValueAtKey(new_clip.inPoint.seconds, prop_dict["photo"][dimensions]["scaleInKey"], 1)
+            position.addKey(new_clip.inPoint.seconds)
+            position.setValueAtKey(new_clip.inPoint.seconds, [0.5, 0.5], 1)
+            # end keyframes
+            # I like to have each clip's end keyframes occur at the start of
+            # the last frame for which the clip is visible.
+            outTime = new_clip.outPoint.seconds - frameTime.seconds
+            scale.addKey(outTime)
+            scale.setValueAtKey(outTime, prop_dict["photo"][dimensions]["scaleOutKey"], 1)
+            position.addKey(outTime)
+            position.setValueAtKey(outTime, [0.5, 0.5], 1)
         seq_time.seconds += new_clip.duration.seconds
         
         
@@ -419,7 +425,7 @@ def main():
         bin_dict = memoize_bins(parent_bin, pickle_filename)
 
     # Next read the "config_sequence" to decide how to handle each media type
-    seq_settings, prop_dict = read_config_sequence(project, "config_sequence_demo", sorted_files)
+    seq_settings, prop_dict = read_config_sequence(project, "config_sequence", sorted_files)
 
     # create a new sequence using the same settings as the config sequence
     new_seq_name = "GENERATED_SEQUENCE"
