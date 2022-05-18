@@ -1,0 +1,159 @@
+{
+    "Chris's Photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 12, 2022 5:24:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 19, 2022 05:34:00 PM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Gio's photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 12, 2022 06:09:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 18, 2022 10:50:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Graber iPhone": {
+        "timezones": [
+            [
+                "",
+                "America/New_York"
+            ],
+            [
+                "January 8, 2022 11:00:00 AM",
+                "America/Chicago"
+            ],
+            [
+                "January 8, 2022 01:30:00 PM",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 12, 2022 02:30:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 18, 2022 10:50:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Kusal’s Photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 13, 2022 05:38:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 20, 2022 05:00:00 PM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Madelaine's photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 13, 2022 07:10:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 19, 2022 11:30:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Maeve’s photos": {
+        "timezones": [
+            [
+                "",
+                "America/Boise"
+            ],
+            [
+                "January 19, 2022 11:30:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Matt DSLR\\JPGs": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 12, 2022 4:50:00 PM",
+                "America/Boise"
+            ],
+            [
+                "January 18, 2022 11:00:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Matt DSLR": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ]
+        ],
+        "datefield": "Date modified"
+    },
+    "Matt L’s Photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 13, 2022 10:30:00 AM",
+                "America/Boise"
+            ],
+            [
+                "January 19, 2022 09:00:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    },
+    "Tim's Photos": {
+        "timezones": [
+            [
+                "",
+                "America/Los_Angeles"
+            ],
+            [
+                "January 13, 2022 09:00:00 AM",
+                "America/Boise"
+            ],
+            [
+                "January 19, 2022 09:00:00 AM",
+                "America/Los_Angeles"
+            ]
+        ]
+    }
+}

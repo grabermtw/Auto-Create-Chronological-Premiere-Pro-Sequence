@@ -1,10 +1,11 @@
-from operator import ne
-from sqlite3 import TimeFromTicks
-from turtle import width
+from pyexpat import native_encoding
+from typing import Set
 import pymiere
 import os
 import sys
 import win32com.client
+from win32com.propsys import propsys, pscon
+import pytz
 from datetime import datetime
 import json
 import cv2
@@ -12,8 +13,8 @@ import re
 import pickle
 
 # To run:
-# `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename>`
-# Example: `python3 ./create_chronological_prpro_seq .. sorted_files.json`
+# `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename> <timezone config json filename>`
+# Example: `python3 ./create_chronological_prpro_seq .. sorted_files.json timezone_config.json`
 
 # IMPORTANT: Manually import all files into premiere *first*
 
@@ -56,24 +57,32 @@ def get_file_metadata(dir_path, filename):
 
     file_metadata = {}
 
-    colnum = 0
+    column = 0
     columns = []
     while True:
-        colname=ns.GetDetailsOf(None, colnum)
+        colname=ns.GetDetailsOf(None, column)
         if not colname:
             break
         columns.append(colname)
-        colnum += 1
+        column += 1
 
     item = ns.ParseName(str(filename))
-    for colnum in range(len(columns)):
-        colval=ns.GetDetailsOf(item, colnum)
+    for column in range(len(columns)):
+        colval=ns.GetDetailsOf(item, column)
         if colval:
-            file_metadata[columns[colnum]] = colval
+            file_metadata[columns[column]] = colval
     
     for field in DATE_META:
         file_metadata[field] = clean_date_string(file_metadata.get(field))
 
+    if os.path.splitext(filename)[-1].lower() in VIDEO_EXTENSIONS:
+        try:
+            # https://stackoverflow.com/questions/31507038/python-how-to-read-windows-media-created-date-not-file-creation-date
+            properties = propsys.SHGetPropertyStoreFromParsingName(os.path.join(dir_path, filename))
+            dt = properties.GetValue(pscon.PKEY_Media_DateEncoded).GetValue()
+            file_metadata["Media created"] = dt
+        except:
+            pass
     return file_metadata
 
 DIMENSIONS_PATTERN = re.compile(r"(\d+) x (\d+)")
@@ -81,15 +90,48 @@ DIMENSIONS_PATTERN = re.compile(r"(\d+) x (\d+)")
 # Search the metadata of a file and get its earliest date as well as its dimensions
 # because Adobe ExtendScript doesn't have a way to get the dimensions of a photo or video
 # from an item that has been imported into Premiere Pro for some reason :/
-def get_earliest_date_and_dimensions(filepath):
+def get_earliest_date_and_dimensions(filepath, subdir_tz_config):
+    
+    def determine_timezone(naive_dt):
+        utc_dt = pytz.utc.localize(naive_dt)
+        # determine which timezone to use by comparing the original time
+        # to each timezone config time
+        tz_to_use = subdir_tz_config["timezones"][0][1]
+        for dt_pair in subdir_tz_config["timezones"][1:]:
+            dt = datetime.strptime(dt_pair[0], '%B %d, %Y %I:%M:%S %p')
+            # update tz_to_use if the original time is later than a
+            # timezone option's time bound in the config
+            if utc_dt > pytz.utc.localize(dt):
+                tz_to_use = dt_pair[1]
+        return tz_to_use
+
     dir_path = os.path.abspath(os.path.split(filepath)[0])
     filename = os.path.split(filepath)[-1]
     file_meta = get_file_metadata(dir_path, filename)
+    correct_dt = None
     # convert to datetime objects for comparison
-    datetime_meta = []
-    for field in DATE_META:
-        if file_meta[field] != "NA":
-            datetime_meta.append(datetime.strptime(file_meta[field], '%m/%d/%Y %I:%M %p'))
+    try:
+        # If the datetime field to use was specified in the config file...
+        naive_dt = datetime.strptime(file_meta[subdir_tz_config["datefield"]], '%m/%d/%Y %I:%M %p')
+        tz_to_use = determine_timezone(naive_dt)
+        correct_dt = naive_dt.astimezone(tz=pytz.timezone(tz_to_use))
+
+    except KeyError: # otherwise just use the earliest datetime
+        datetime_meta = []
+        for field in DATE_META:
+            if file_meta[field] != "NA":
+                if isinstance(file_meta[field], datetime):
+                    datetime_meta.append(file_meta[field])
+                else:
+                    # convert to datetime and apply the appropriate timezone
+                    # based on what was specified in the timezone config json
+                    naive_dt = datetime.strptime(file_meta[field], '%m/%d/%Y %I:%M %p')
+                    # determine which timezone to use
+                    tz_to_use = determine_timezone(naive_dt)
+                    tz_aware_dt = naive_dt.astimezone(tz=pytz.timezone(tz_to_use))
+                    datetime_meta.append(tz_aware_dt)
+        correct_dt = min(datetime_meta)
+    
     
     # Get the dimensions, defaulting to 0 if the dimensions aren't in the metadata and if
     # OpenCV can't calculate them. Some .MOV
@@ -129,12 +171,12 @@ def get_earliest_date_and_dimensions(filepath):
 
     # return a dictionary with the earliest date and dimensions
     return { "filename": filepath,
-             "datetime": min(datetime_meta),
+             "datetime": correct_dt,
              "height": height,
              "width": width }
 
 # Sort all the files based on earliest datetime in metadata
-def sort_files(search_root, sorted_json_filename):
+def sort_files(search_root, sorted_json_filename, tz_config):
     print("Retrieving metadata of files...")
     # Get list of all files in windows file explorer (not premiere)
     
@@ -145,16 +187,36 @@ def sort_files(search_root, sorted_json_filename):
 
     numfiles = len(all_files)
 
+    # Retrieve all the relevant metadata for each file
+    filepathnames = set()
+    live_photos = []
     file_metas = []
     for i, filepath in enumerate(all_files):
         if i % 100 == 0:
             print("Metadata retrieved from", i, "files of", numfiles)
         print(filepath)
-        file_meta = get_earliest_date_and_dimensions(filepath)
+        subdir = os.path.join(*filepath.split('\\')[1:-1])
+        file_meta = get_earliest_date_and_dimensions(filepath, tz_config[subdir])
         file_metas.append(file_meta)
+        # determine if it's a live photo (if the filepath without the extension has already appeared)
+        filepath_wo_ext = os.path.splitext(filepath)[0]
+        if filepath_wo_ext in filepathnames:
+            live_photos.append((filepath, i))
+        else:
+            # add to the set of filepathnames we've already seen
+            filepathnames.add(os.path.splitext(filepath)[0])
+    
+    # Handle live photos (it shouldn't be assumed that a live photo's video will come before its image)
+    for lp in live_photos:
+        # find the photo that corresponds to the live photo's video
+        # and assign its datetime to the live photo's video
+        dt = next(x["datetime"] for x in file_metas if os.path.splitext(x["filename"])[0] == os.path.splitext(lp[0])[0] and x["filename"] != lp[0])
+        file_metas[lp[1]]["datetime"] = dt
+    
+    # TODO: Handle live photos! They will be videos that share the same filepath/filename as the photo that they should be positioned next to!
 
     print("Sorting files by datetime...")
-    # sort list by earliest date in metadata
+    # sort list by earliest date in metadata, which will be found in the 'datetime' field
     sorted_files = sorted(file_metas, key=lambda x: x['datetime'])
     print("Sorted! Saving sorted files metadata in {0}.".format(sorted_json_filename))
 
@@ -315,6 +377,8 @@ def main():
     # ---- PART 1: Organize the files ----
     search_root = sys.argv[1]
     sorted_json_filename = sys.argv[2]
+    tz_config_filename = sys.argv[3]
+
     project = pymiere.objects.app.project
 
     # Before doing anything else, verify that the specified directory is present as a bin
@@ -327,6 +391,11 @@ def main():
                "in Premiere that contains the subdirectories with the media!").format(root_dirname))
         exit(1)
 
+    # Obtain the information on timezones
+    with open(tz_config_filename, "r", encoding="utf-8") as f:
+        tz_config = json.load(f)
+        print("Loaded timezone information from {0}".format(tz_config_filename))
+
     # only get all the metadata and sort it if we haven't done that before
     sorted_files = []
     if os.path.exists(sorted_json_filename):
@@ -334,7 +403,7 @@ def main():
             sorted_files = json.load(f)
         print("Sorted files relevant metadata loaded from {0}".format(sorted_json_filename))
     else:
-        sorted_files = sort_files(search_root, sorted_json_filename)
+        sorted_files = sort_files(search_root, sorted_json_filename, tz_config)
     
     # ---- PART 2: Read the Premiere Pro config sequence and generate the new sequence
     
