@@ -1,6 +1,7 @@
 from pyexpat import native_encoding
 from typing import Set
 import pymiere
+from pymiere.wrappers import time_from_seconds
 import os
 import sys
 import win32com.client
@@ -357,7 +358,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
         else:
             position = next(x for x in motion.properties if x.displayName == "Position")
             dimensions = calculate_closest_dimensions(file_info, prop_dict["photo"])
-            new_clip.outPoint.seconds = seq_time.seconds + prop_dict["photo"][dimensions]["duration"].seconds
+            new_clip.end = time_from_seconds(seq_time.seconds + prop_dict["photo"][dimensions]["duration"].seconds)
             scale.setTimeVarying(True)
             position.setTimeVarying(True)
             # start keyframes
