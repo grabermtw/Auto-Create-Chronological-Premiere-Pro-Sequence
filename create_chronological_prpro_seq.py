@@ -219,6 +219,26 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     # sort list by earliest date in metadata, which will be found in the 'datetime' field
     sorted_files = sorted(file_metas, key=lambda x: x['datetime'])
     print("Sorted! Saving sorted files metadata in {0}.".format(sorted_json_filename))
+    
+    # TODO: Sort files with the same datetime by the last four digits of their filename (if applicable)
+    # Divide list into sublists based on identical datetimes
+    sorted_files_dt_groups = []
+    current_dt = None
+    for file_meta in sorted_files:
+        # create new datetime sublist if it's a new datetime
+        if file_meta["datetime"] != current_dt:
+            current_dt = file_meta["datetime"]
+            sorted_files_dt_groups.append([file_meta])
+        else: # otherwise add to the most recent datetime sublist
+            sorted_files_dt_groups[-1].append(file_meta)
+
+    # Sort each datetime sublist based on the last 4 digits of name (ex. "IMG_4025.JPG").
+    # This won't be applicable for everything but it's better than nothing.
+    for dt_group in sorted_files_dt_groups:
+        dt_group.sort(key=lambda x: os.path.splitext(x["filename"])[-4])
+    
+    # Recombine the sorted datetime sublists into the big flat list
+    sorted_files = [file_meta for dt_group in sorted_files_dt_groups for file_meta in dt_group]
 
     # save the list in a JSON file so we hopefully don't have to redo this whole thing again
     with open(sorted_json_filename, "w") as f:
@@ -371,7 +391,8 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
             # end keyframes
             # I like to have each clip's end keyframes occur at the start of
             # the last frame for which the clip is visible.
-            outTime = new_clip.outPoint.seconds - frameTime.seconds
+            outTime = new_clip.inPoint.seconds + new_clip.duration.seconds - frameTime.seconds
+            print("outTime:", outTime)
             scale.addKey(outTime)
             scale.setValueAtKey(outTime, prop_dict["photo"][dimensions]["scaleOutKey"], 1)
             position.addKey(outTime)
