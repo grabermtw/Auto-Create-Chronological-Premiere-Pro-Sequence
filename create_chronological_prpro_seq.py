@@ -184,7 +184,8 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     all_files = []
     for (dirpath, _, filenames) in os.walk(search_root):
         if "..\\Auto-Create-Chronological-Premiere-Pro-Sequence" not in dirpath:
-            all_files.extend(os.path.join(dirpath, filename) for filename in filenames)
+            # skip RAW files
+            all_files.extend(os.path.join(dirpath, filename) for filename in filenames if os.path.splitext(filename)[1].lower() not in [".cr2", ".cr3"])
 
     numfiles = len(all_files)
 
@@ -334,6 +335,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
     num_files = len(sorted_files)
     for i, file_info in enumerate(sorted_files):
         proj_item = None
+        # there shouldn't be any RAW files but skip them to remain sane anyways
         if os.path.splitext(file_info['filename'])[-1].lower() in [".cr2", ".cr3"]:
             print("{0} of {1}: Skipping RAW file {2}".format(str(i + 1), num_files, file_info['filename']))
             continue
