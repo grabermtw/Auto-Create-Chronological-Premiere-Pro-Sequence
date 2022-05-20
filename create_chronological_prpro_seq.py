@@ -234,8 +234,8 @@ def sort_files(search_root, sorted_json_filename, tz_config):
 
     # Sort each datetime sublist based on the last 4 digits of name (ex. "IMG_4025.JPG").
     # This won't be applicable for everything but it's better than nothing.
-    for dt_group in sorted_files_dt_groups:
-        dt_group.sort(key=lambda x: os.path.splitext(x["filename"])[-4])
+    for i in range(len(sorted_files_dt_groups)):
+        sorted_files_dt_groups[i].sort(key=lambda x: os.path.splitext(x["filename"])[0][-4])
     
     # Recombine the sorted datetime sublists into the big flat list
     sorted_files = [file_meta for dt_group in sorted_files_dt_groups for file_meta in dt_group]
