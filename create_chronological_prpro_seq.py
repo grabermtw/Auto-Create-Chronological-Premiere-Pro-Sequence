@@ -367,7 +367,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
                        "and will be skipped!").format(file_info['filename']))
             continue
         # add the projectItem to the sequence
-        track.insertClip(proj_item, seq_time.seconds)
+        track.overwriteClip(proj_item, seq_time.seconds)
         # apply the appropriate Motion properties
         new_clip = track.clips[i]
         motion = next(x for x in new_clip.components if x.displayName == "Motion")
@@ -392,7 +392,6 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
             # I like to have each clip's end keyframes occur at the start of
             # the last frame for which the clip is visible.
             outTime = new_clip.inPoint.seconds + new_clip.duration.seconds - frameTime.seconds
-            print("outTime:", outTime)
             scale.addKey(outTime)
             scale.setValueAtKey(outTime, prop_dict["photo"][dimensions]["scaleOutKey"], 1)
             position.addKey(outTime)
