@@ -12,14 +12,13 @@ import re
 import pickle
 
 # To run:
-# `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename> <timezone config json filename>`
+# `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename> <timezone config json filename> <name of sequence in Premiere>`
 # Example: `python3 ./create_chronological_prpro_seq .. sorted_files.json timezone_config.json`
 
 # IMPORTANT: Manually import all files into premiere *first*.
 #            Delete bin_dict_pkl.pkl every time you restart Premiere
 
 # TODO: automate deleting and regenerating bin_dict_pkl.pkl when Premiere is restarted
-# TODO: add ability to pick up where you left off if you interrupt the script while it is adding the clips to the sequence.
 
 # ---- PART 1 FUNCTIONS: Sorting the files by earliest date in metadata ---- 
 
@@ -369,23 +368,22 @@ def calculate_closest_dimensions(file_info, media_dict):
 
 # Populate the new sequence with the photos and videos in the correct order
 # with the correct motion properties applied
-def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
+def add_clips_to_sequence(new_seq, sorted_files, start_idx, prop_dict, bin_dict, seq_time):
     print("Adding clips to sequence in chronological order...")
     track = new_seq.videoTracks[0]
-    seq_time = pymiere.Time()
-    seq_time.seconds = 0
     # get the time duration of a single frame
     frameTime = pymiere.Time()
     frameTime.ticks = str(new_seq.timebase)
     num_files = len(sorted_files)
-    for i, file_info in enumerate(sorted_files):
+    sorted_files_to_add = sorted_files[start_idx:]
+    for i, file_info in enumerate(sorted_files_to_add):
         proj_item = None
         # there shouldn't be any RAW files but skip them to remain sane anyways
         if os.path.splitext(file_info['filename'])[-1].lower() in [".cr2", ".cr3"]:
-            print("{0} of {1}: Skipping RAW file {2}".format(str(i + 1), num_files, file_info['filename']))
+            print("{0} of {1}: Skipping RAW file {2}".format(str(start_idx + i + 1), num_files, file_info['filename']))
             continue
         try:
-            print("{0} of {1}: Adding {2} to the sequence and applying motion properties...".format(str(i+1), num_files, file_info["filename"]))
+            print("{0} of {1}: Adding {2} to the sequence and applying motion properties...".format(str(start_idx + i + 1), num_files, file_info["filename"]))
             proj_item = bin_dict[file_info["filename"]]
         except KeyError:
             print(("WARNING: {0} appears to be missing from the Premiere project files "
@@ -394,7 +392,7 @@ def add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict):
         # add the projectItem to the sequence
         track.overwriteClip(proj_item, seq_time.seconds)
         # apply the appropriate Motion properties
-        new_clip = track.clips[i]
+        new_clip = track.clips[start_idx + i]
         motion = next(x for x in new_clip.components if x.displayName == "Motion")
         scale = next(x for x in motion.properties if x.displayName == "Scale")
         # video
@@ -432,6 +430,7 @@ def main():
     search_root = sys.argv[1]
     sorted_json_filename = sys.argv[2]
     tz_config_filename = sys.argv[3]
+    seq_name = sys.argv[4]
 
     project = pymiere.objects.app.project
 
@@ -477,23 +476,44 @@ def main():
     # Next read the "config_sequence" to decide how to handle each media type
     seq_settings, prop_dict = read_config_sequence(project, "config_sequence", sorted_files)
 
-    # create a new sequence using the same settings as the config sequence
-    new_seq_name = "GENERATED_SEQUENCE"
-    print("Go click \"OK\" on the alert in Premiere!")
-    pymiere.objects.alert(("You're about to be prompted to create a new sequence.\n"
-                           "Just click \"OK\" and don't worry about it!"))
-    print("Creating new sequence {0}...".format(new_seq_name))
-    project.createNewSequence(new_seq_name, "placeholderID")
-    # user might need to click "Okay" in Premiere here
-    new_seq = next(x for x in project.sequences if x.name == new_seq_name)
-    new_seq.setSettings(seq_settings)
-    print("Sequence {0} has been created!".format(new_seq_name))
+    # Check if the specified sequence name already exists.
+    existing_seq = next((x for x in project.sequences if x.name == seq_name), None)
+    # If it doesn't, then we'll create a new sequence.
+    if existing_seq is None:
+        # create a new sequence using the same settings as the config sequence
+        print("Go click \"OK\" on the alert in Premiere!")
+        pymiere.objects.alert(("You're about to be prompted to create a new sequence.\n"
+                            "Just click \"OK\" and don't worry about it!"))
+        print("Creating new sequence {0}...".format(seq_name))
+        project.createNewSequence(seq_name, "placeholderID")
+        # user might need to click "Okay" in Premiere here
+        new_seq = next(x for x in project.sequences if x.name == seq_name)
+        new_seq.setSettings(seq_settings)
+        print("Sequence {0} has been created!".format(seq_name))
+        # create time object initialized to 0
+        seq_time = pymiere.Time()
+        seq_time.seconds = 0
+        # Populate the new sequence with the photos and videos in the correct order
+        # with the correct motion properties applied
+        add_clips_to_sequence(new_seq, sorted_files, 0, prop_dict, bin_dict, seq_time)
+    # If it does, then we'll just add to that existing sequence.
+    else:
+        print("Figuring out where we left off...")
+        # figure out what the last item added was and at what point it stopped
+        last_clip = existing_seq.videoTracks[0].clips[-1]
+        resume_time = pymiere.Time()
+        resume_time.seconds = last_clip.end.seconds
+        last_filepath = bin_tree_path_to_filepath(last_clip.projectItem.treePath)
+        resume_idx = next((i for i, file_meta in enumerate(sorted_files) if file_meta["filename"] == last_filepath), None)
+        if resume_idx is None:
+            print("Could not find {0} in {1}!".format(last_filepath, sorted_json_filename))
+            exit(1)
+        # Continue to populate the new sequence with the photos and videos in the correct order
+        # with the correct motion properties applied
+        print("Adding to existing sequence {0}...".format(seq_name))
+        add_clips_to_sequence(existing_seq, sorted_files, resume_idx + 1, prop_dict, bin_dict, resume_time)
 
-    # Populate the new sequence with the photos and videos in the correct order
-    # with the correct motion properties applied
-    add_clips_to_sequence(new_seq, sorted_files, prop_dict, bin_dict)
-
-    print("Finished adding all {0} clips to {1}!".format(len(sorted_files), new_seq_name))
+    print("Finished adding all {0} clips to {1}!".format(len(sorted_files), seq_name))
     exit(0)
 
 if __name__ == "__main__":
