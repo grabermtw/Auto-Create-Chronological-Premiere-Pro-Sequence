@@ -1,5 +1,3 @@
-from pyexpat import native_encoding
-from typing import Set
 import pymiere
 from pymiere.wrappers import time_from_seconds
 import os
