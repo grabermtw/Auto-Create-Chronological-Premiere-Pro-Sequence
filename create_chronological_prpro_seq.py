@@ -242,9 +242,8 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     print("Sorting files by datetime...")
     # sort list by earliest date in metadata, which will be found in the 'datetime' field
     sorted_files = sorted(file_metas, key=lambda x: x['datetime'])
-    print("Sorted! Saving sorted files metadata in {0}.".format(sorted_json_filename))
     
-    # TODO: Sort files with the same datetime by the last four digits of their filename (if applicable)
+    # Sort files with the same datetime by the last four digits of their filename (if applicable)
     # Divide list into sublists based on identical datetimes
     sorted_files_dt_groups = []
     current_dt = None
@@ -264,6 +263,7 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     # Recombine the sorted datetime sublists into the big flat list
     sorted_files = [file_meta for dt_group in sorted_files_dt_groups for file_meta in dt_group]
 
+    print("Sorted! Saving sorted files metadata in {0}.".format(sorted_json_filename))
     # save the list in a JSON file so we hopefully don't have to redo this whole thing again
     with open(sorted_json_filename, "w") as f:
         f.write(json.dumps(sorted_files, default=str, sort_keys=False))
