@@ -7,7 +7,7 @@ import sys
 import win32com.client
 from win32com.propsys import propsys, pscon
 import pytz
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import cv2
 import re
@@ -105,6 +105,19 @@ def get_earliest_date_and_dimensions(filepath, subdir_tz_config):
             if utc_dt > pytz.utc.localize(dt):
                 tz_to_use = dt_pair[1]
         return tz_to_use
+    
+    # used for the "Media created field"
+    def determine_timezone_media_created(naive_dt):
+        # determine which timezone to use by comparing the original time
+        # to each timezone config time
+        tz_to_use = subdir_tz_config["timezones"][0][1]
+        for dt_pair in subdir_tz_config["timezones"][1:]:
+            dt = datetime.strptime(dt_pair[0], '%B %d, %Y %I:%M:%S %p')
+            # update tz_to_use if the original time is later than a
+            # timezone option's time bound in the config
+            if naive_dt.astimezone(tz=pytz.timezone(dt_pair[1])) > pytz.utc.localize(dt):
+                tz_to_use = dt_pair[1]
+        return tz_to_use
 
     dir_path = os.path.abspath(os.path.split(filepath)[0])
     filename = os.path.split(filepath)[-1]
@@ -114,24 +127,34 @@ def get_earliest_date_and_dimensions(filepath, subdir_tz_config):
     try:
         # If the datetime field to use was specified in the config file...
         naive_dt = datetime.strptime(file_meta[subdir_tz_config["datefield"]], '%m/%d/%Y %I:%M %p')
-        tz_to_use = determine_timezone(naive_dt)
-        correct_dt = naive_dt.astimezone(tz=pytz.timezone(tz_to_use))
+        tz_to_use = pytz.timezone(determine_timezone(naive_dt))
+        correct_dt = tz_to_use.localize(naive_dt)
 
-    except KeyError: # otherwise just use the earliest datetime
-        datetime_meta = []
-        for field in DATE_META:
-            if file_meta[field] != "NA":
-                if isinstance(file_meta[field], datetime):
-                    datetime_meta.append(file_meta[field])
-                else:
-                    # convert to datetime and apply the appropriate timezone
-                    # based on what was specified in the timezone config json
-                    naive_dt = datetime.strptime(file_meta[field], '%m/%d/%Y %I:%M %p')
-                    # determine which timezone to use
-                    tz_to_use = determine_timezone(naive_dt)
-                    tz_aware_dt = naive_dt.astimezone(tz=pytz.timezone(tz_to_use))
-                    datetime_meta.append(tz_aware_dt)
-        correct_dt = min(datetime_meta)
+    except KeyError: # otherwise see if "Media created" if is there
+        if file_meta["Media created"] != "NA":
+            # Make the "Media created" field naive.
+            # For the case of a "Media created" field, the datetime is initially timezone-aware,
+            # but only so much that it thinks it was taken in the timezone that this script is running in.
+            # For example, a video taken in PST would appear to have a tz-aware datetime that is accurate
+            # if the video were actually taken in EST if the script is being run in EST.
+            naive_dt = file_meta["Media created"].astimezone(datetime.now(timezone.utc).astimezone().tzinfo).replace(tzinfo=None)
+            tz_to_use = determine_timezone_media_created(naive_dt)
+            correct_dt = file_meta["Media created"].astimezone(tz=pytz.timezone(tz_to_use))
+        else:
+            datetime_meta = []
+            for field in DATE_META:
+                if file_meta[field] != "NA":
+                    if isinstance(file_meta[field], datetime):
+                        datetime_meta.append(file_meta[field])
+                    else:
+                        # convert to datetime and apply the appropriate timezone
+                        # based on what was specified in the timezone config json
+                        naive_dt = datetime.strptime(file_meta[field], '%m/%d/%Y %I:%M %p')
+                        # determine which timezone to use
+                        tz_to_use = pytz.timezone(determine_timezone(naive_dt))
+                        tz_aware_dt = tz_to_use.localize(naive_dt)
+                        datetime_meta.append(tz_aware_dt)
+            correct_dt = min(datetime_meta)
     
     
     # Get the dimensions, defaulting to 0 if the dimensions aren't in the metadata and if
@@ -185,7 +208,7 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     for (dirpath, _, filenames) in os.walk(search_root):
         if "..\\Auto-Create-Chronological-Premiere-Pro-Sequence" not in dirpath:
             # skip RAW files
-            all_files.extend(os.path.join(dirpath, filename) for filename in filenames if os.path.splitext(filename)[1].lower() not in [".cr2", ".cr3"])
+            all_files.extend(os.path.join(dirpath, filename) for filename in filenames if os.path.splitext(filename)[1].lower() not in [".cr2", ".cr3"])#, ".heic", ".jpeg"]) # uncomment for speed
 
     numfiles = len(all_files)
 
@@ -439,6 +462,8 @@ def main():
     # First memoize the contents of the bins in the Premiere Pro file
     # because Premiere is incredibly slow at searching the bins....
     # It's better to just do it once.
+    # NOTE: if you restart Premiere, you may need to delete bin_dict_pkl.pkl
+    # so that this operation can be performed again.
     pickle_filename = "bin_dict_pkl"
     if os.path.exists(pickle_filename):
         with open(pickle_filename, 'rb') as f:
