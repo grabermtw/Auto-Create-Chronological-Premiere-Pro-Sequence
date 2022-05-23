@@ -15,7 +15,11 @@ import pickle
 # `python3 ./create_chronological_prpro_seq <relative search path> <sorted files list json filename> <timezone config json filename>`
 # Example: `python3 ./create_chronological_prpro_seq .. sorted_files.json timezone_config.json`
 
-# IMPORTANT: Manually import all files into premiere *first*
+# IMPORTANT: Manually import all files into premiere *first*.
+#            Delete bin_dict_pkl.pkl every time you restart Premiere
+
+# TODO: automate deleting and regenerating bin_dict_pkl.pkl when Premiere is restarted
+# TODO: add ability to pick up where you left off if you interrupt the script while it is adding the clips to the sequence.
 
 # ---- PART 1 FUNCTIONS: Sorting the files by earliest date in metadata ---- 
 
