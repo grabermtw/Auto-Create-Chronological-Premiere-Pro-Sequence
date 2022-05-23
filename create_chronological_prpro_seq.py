@@ -499,11 +499,13 @@ def main():
     # If it does, then we'll just add to that existing sequence.
     else:
         print("Figuring out where we left off...")
-        # figure out what the last item added was and at what point it stopped
-        last_clip = existing_seq.videoTracks[0].clips[-1]
+        # Figure out what the second to last item added was and at what point it stopped.
+        # Use second-to-last because the last item may not have been fully added,
+        # and thus it should be overwritten.
+        second_to_last_clip = existing_seq.videoTracks[0].clips[-2]
         resume_time = pymiere.Time()
-        resume_time.seconds = last_clip.end.seconds
-        last_filepath = bin_tree_path_to_filepath(last_clip.projectItem.treePath)
+        resume_time.seconds = second_to_last_clip.end.seconds
+        last_filepath = bin_tree_path_to_filepath(second_to_last_clip.projectItem.treePath)
         resume_idx = next((i for i, file_meta in enumerate(sorted_files) if file_meta["filename"] == last_filepath), None)
         if resume_idx is None:
             print("Could not find {0} in {1}!".format(last_filepath, sorted_json_filename))
