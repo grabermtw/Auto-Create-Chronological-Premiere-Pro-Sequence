@@ -386,8 +386,9 @@ def add_clips_to_sequence(new_seq, sorted_files, start_idx, prop_dict, bin_dict,
             print("{0} of {1}: Adding {2} to the sequence and applying motion properties...".format(str(start_idx + i + 1), num_files, file_info["filename"]))
             proj_item = bin_dict[file_info["filename"]]
         except KeyError:
-            print(("WARNING: {0} appears to be missing from the Premiere project files "
-                       "and will be skipped!").format(file_info['filename']))
+            print(("ERROR: {0} appears to be missing from the Premiere project files "
+                       "and problems are about to occur! Delete its entry from the sorted files "
+                       "JSON file if you're unable to import it into Premiere!").format(file_info['filename']))
             continue
         # add the projectItem to the sequence
         track.overwriteClip(proj_item, seq_time.seconds)
