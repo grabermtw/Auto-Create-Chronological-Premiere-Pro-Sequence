@@ -131,8 +131,8 @@ def get_earliest_date_and_dimensions(filepath, subdir_tz_config):
         tz_to_use = pytz.timezone(determine_timezone(naive_dt))
         correct_dt = tz_to_use.localize(naive_dt)
 
-    except KeyError: # otherwise see if "Media created" if is there
-        if file_meta["Media created"] != "NA":
+    except: # otherwise see if "Media created" if is there
+        if file_meta["Media created"] != "NA" and file_meta["Media created"] is not None:
             # Make the "Media created" field naive.
             # For the case of a "Media created" field, the datetime is initially timezone-aware,
             # but only so much that it thinks it was taken in the timezone that this script is running in.
@@ -144,7 +144,7 @@ def get_earliest_date_and_dimensions(filepath, subdir_tz_config):
         else:
             datetime_meta = []
             for field in DATE_META:
-                if file_meta[field] != "NA":
+                if file_meta[field] != "NA" and file_meta[field] is not None:
                     if isinstance(file_meta[field], datetime):
                         datetime_meta.append(file_meta[field])
                     else:
@@ -209,7 +209,7 @@ def sort_files(search_root, sorted_json_filename, tz_config):
     for (dirpath, _, filenames) in os.walk(search_root):
         if "..\\Auto-Create-Chronological-Premiere-Pro-Sequence" not in dirpath:
             # skip RAW files
-            all_files.extend(os.path.join(dirpath, filename) for filename in filenames if os.path.splitext(filename)[1].lower() not in [".cr2", ".cr3"])#, ".heic", ".jpeg"]) # uncomment for speed
+            all_files.extend(os.path.join(dirpath, filename) for filename in filenames if os.path.splitext(filename)[1].lower() not in [".cr2", ".cr3", ".aae"])#, ".heic", ".jpeg"]) # uncomment for speed
 
     numfiles = len(all_files)
 
@@ -221,8 +221,11 @@ def sort_files(search_root, sorted_json_filename, tz_config):
         if i % 100 == 0:
             print("Metadata retrieved from", i, "files of", numfiles)
         print(filepath)
-        subdir = os.path.join(*filepath.split('\\')[1:-1])
-        file_meta = get_earliest_date_and_dimensions(filepath, tz_config[subdir])
+        if "force_time" in tz_config:
+            file_meta = get_earliest_date_and_dimensions(filepath, tz_config["force_time"])
+        else:
+            subdir = os.path.join(*filepath.split('\\')[1:-1])
+            file_meta = get_earliest_date_and_dimensions(filepath, tz_config[subdir])
         file_metas.append(file_meta)
         # determine if it's a live photo (if the filepath without the extension has already appeared)
         filepath_wo_ext = os.path.splitext(filepath)[0]
@@ -378,8 +381,8 @@ def add_clips_to_sequence(new_seq, sorted_files, start_idx, prop_dict, bin_dict,
     sorted_files_to_add = sorted_files[start_idx:]
     for i, file_info in enumerate(sorted_files_to_add):
         proj_item = None
-        # there shouldn't be any RAW files but skip them to remain sane anyways
-        if os.path.splitext(file_info['filename'])[-1].lower() in [".cr2", ".cr3"]:
+        # there shouldn't be any RAW or .AAE files but skip them to remain sane anyways
+        if os.path.splitext(file_info['filename'])[-1].lower() in [".cr2", ".cr3", ".aae"]:
             print("{0} of {1}: Skipping RAW file {2}".format(str(start_idx + i + 1), num_files, file_info['filename']))
             continue
         try:
@@ -432,6 +435,7 @@ def main():
     sorted_json_filename = sys.argv[2]
     tz_config_filename = sys.argv[3]
     seq_name = sys.argv[4]
+    no_subdirs = True if sys.argv[5] is not None else False
 
     project = pymiere.objects.app.project
 
@@ -442,13 +446,17 @@ def main():
     if not parent_bin:
         print(("ERROR: Bin \"{0}\" not found.\n"
                "There should be a bin named {0} in the root of the project explorer"
-               "in Premiere that contains the subdirectories with the media!").format(root_dirname))
+               "in Premiere that contains the subdirectories and media!").format(root_dirname))
         exit(1)
 
     # Obtain the information on timezones
-    with open(tz_config_filename, "r", encoding="utf-8") as f:
-        tz_config = json.load(f)
-        print("Loaded timezone information from {0}".format(tz_config_filename))
+    try:
+        with open(tz_config_filename, "r", encoding="utf-8") as f:
+            tz_config = json.load(f)
+            print("Loaded timezone information from {0}".format(tz_config_filename))
+    except OSError: # Default if no timezone config is present
+        print("Timezone config file", tz_config_filename, " not found, forcing everything to Pacific Time.")
+        tz_config = { "force_time": { "timezones": [ [ "", "America/Los_Angeles" ] ] } }
 
     # only get all the metadata and sort it if we haven't done that before
     sorted_files = []
